@@ -434,7 +434,7 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 
 
 	function transfer (address target, uint256 value) public whenRunning canTransfer(msg.sender, target, value) returns (bool) {
-		require(canPay(msg.sender, value));
+		require(canPay(target, value));
 
 		wallets[msg.sender] = wallets[msg.sender].sub(value);
 		wallets[target] = wallets[target].add(value);
