@@ -472,6 +472,5 @@ contract FountainToken is LockableToken {
 	constructor () public LockableToken(TOKEN_INITIAL, TOKEN_CAP) {
 		wallets[msg.sender] = TOKEN_INITIAL;
 		emit Mint(msg.sender, TOKEN_INITIAL);
-		emit Transfer(address(0), msg.sender, TOKEN_INITIAL);
 	}
 }
