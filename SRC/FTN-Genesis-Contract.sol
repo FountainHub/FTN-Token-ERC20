@@ -434,7 +434,7 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 
 
 	function transfer (address target, uint256 value) public whenRunning canTransfer(msg.sender, target, value) returns (bool) {
-		require(canPay(target, value));
+		require(canPay(msg.sender, value));
 
 		wallets[msg.sender] = wallets[msg.sender].sub(value);
 		wallets[target] = wallets[target].add(value);
@@ -472,6 +472,5 @@ contract FountainToken is LockableToken {
 	constructor () public LockableToken(TOKEN_INITIAL, TOKEN_CAP) {
 		wallets[msg.sender] = TOKEN_INITIAL;
 		emit Mint(msg.sender, TOKEN_INITIAL);
-		emit Transfer(address(0), msg.sender, TOKEN_INITIAL);
 	}
 }
