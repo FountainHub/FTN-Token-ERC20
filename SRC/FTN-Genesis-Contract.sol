@@ -363,7 +363,7 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 		}
 
 		mapping(uint => LockBin) locks = lockbins[investor];
-		LockBin memory info = locks[0]; 
+		LockBin storage info = locks[0]; 
 		uint index = info.amount + 1;
 		locks[index] = LockBin({
 			start: releaseStart,
@@ -396,12 +396,12 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 		uint l = locks[0].amount;
 		for (uint i = 1; i <= l; i ++) {
 			LockBin memory bin = locks[i];
-			if (now < bin.finish) {
+			if (now <= bin.start) {
+				balance = balance.add(bin.amount);
+			}
+			else if (now < bin.finish) {
 				d = (now - bin.start) / (1 days);
 				balance = balance.add(bin.amount - bin.amount * d / bin.duration);
-			}
-			else if (now <= bin.start) {
-				balance = balance.add(bin.amount);
 			}
 		}
 		return balance;
