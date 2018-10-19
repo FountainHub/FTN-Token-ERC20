@@ -232,6 +232,7 @@ contract MintAndBurnToken is BasicToken, TokenForge, CappedToken {
 	constructor (uint256 _initial, uint256 _cap) public CappedToken(_cap) {
 		token_created = _initial;
 		wallets[msg.sender] = _initial;
+		emit Mint(msg.sender, _initial);
 		emit Transfer(address(0), msg.sender, _initial);
 	}
 
@@ -467,10 +468,8 @@ contract FountainToken is LockableToken {
 	uint8   public constant decimals = 18;
 
 	uint256 private constant TOKEN_CAP     = 10000000000 * 10 ** uint256(decimals);
-	uint256 private constant TOKEN_INITIAL = 3000000000  * 10 ** uint256(decimals); 
+	uint256 private constant TOKEN_INITIAL = 300000000  * 10 ** uint256(decimals); 
 
 	constructor () public LockableToken(TOKEN_INITIAL, TOKEN_CAP) {
-		wallets[msg.sender] = TOKEN_INITIAL;
-		emit Mint(msg.sender, TOKEN_INITIAL);
 	}
 }
