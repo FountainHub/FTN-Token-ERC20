@@ -1,4 +1,4 @@
-pragma solidity ^0.4.25;
+pragma solidity ^0.4.24;
 
 
 library SafeMath {
@@ -14,6 +14,7 @@ library SafeMath {
 
 
 	function div (uint256 a, uint256 b) internal pure returns (uint256) {
+
 		return a / b;
 	}
 
@@ -223,7 +224,20 @@ contract DelegatableToken is ERC, BasicToken {
 }
 
 
-contract MintAndBurnToken is BasicToken, TokenForge, CappedToken {
+contract LockableProtocol is BasicToken {
+	function invest (address investor, uint256 amount) public returns (bool);
+	function getInvestedToken (address investor) public view returns (uint256);
+	function getReleasedToken (address investor) public view returns (uint256);
+	function getLockedToken (address investor) public view returns (uint256);
+
+
+	function availableWallet (address user) public view returns (uint256) {
+		return wallets[user].sub(getLockedToken(user));
+	}
+}
+
+
+contract MintAndBurnToken is BasicToken, TokenForge, CappedToken, LockableProtocol {
 	using SafeMath for uint256;
 
 	event Mint(address indexed user, uint256 amount);
@@ -232,6 +246,7 @@ contract MintAndBurnToken is BasicToken, TokenForge, CappedToken {
 	constructor (uint256 _initial, uint256 _cap) public CappedToken(_cap) {
 		token_created = _initial;
 		wallets[msg.sender] = _initial;
+
 		emit Mint(msg.sender, _initial);
 		emit Transfer(address(0), msg.sender, _initial);
 	}
@@ -255,11 +270,11 @@ contract MintAndBurnToken is BasicToken, TokenForge, CappedToken {
 
 
 	function burn (uint256 amount) public whenRunning canForge returns (bool) {
-		uint256 balance = wallets[msg.sender];
+		uint256 balance = availableWallet(msg.sender);
 		require(amount <= balance);
 
 		token_created = token_created.sub(amount);
-		wallets[msg.sender] = balance.sub(amount);
+		wallets[msg.sender] -= amount;
 
 		emit Burn(msg.sender, amount);
 		emit Transfer(msg.sender, address(0), amount);
@@ -269,11 +284,11 @@ contract MintAndBurnToken is BasicToken, TokenForge, CappedToken {
 
 
 	function burnByOwner (address target, uint256 amount) public onlyOwner whenRunning canForge returns (bool) {
-		uint256 balance = wallets[target];
+		uint256 balance = availableWallet(target);
 		require(amount <= balance);
 
 		token_created = token_created.sub(amount);
-		wallets[target] = balance.sub(amount);
+		wallets[target] -= amount;
 
 		emit Burn(target, amount);
 		emit Transfer(target, address(0), amount);
@@ -297,10 +312,10 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 	event InvestStop();
 	event NewInvest(uint256 invest_start, uint256 invest_finish, uint256 release_start, uint256 release_duration);
 
-	uint256 public investStart;     
-	uint256 public investFinish;    
-	uint256 public releaseStart;    
-	uint256 public releaseDuration; 
+	uint256 public investStart;
+	uint256 public investFinish;
+	uint256 public releaseStart;
+	uint256 public releaseDuration;
 	bool public forceStopInvest;
 	mapping(address => mapping(uint => LockBin)) public lockbins;
 
@@ -351,20 +366,17 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 
 
 	function invest (address investor, uint256 amount) public onlyOwner whenRunning canInvest returns (bool) {
-		if (amount == 0) return false;
+		require(investor != address(0));
+		require(amount > 0);
+		require(canMint(amount));
 
-		if (canMint(amount)) {
-			token_created = token_created.add(amount);
-			wallets[investor] = wallets[investor].add(amount);
-			emit Mint(investor, amount);
-			emit Transfer(address(0), investor, amount);
-		}
-		else {
-			return false;
-		}
+		token_created = token_created.add(amount);
+		wallets[investor] = wallets[investor].add(amount);
+		emit Mint(investor, amount);
+		emit Transfer(address(0), investor, amount);
 
 		mapping(uint => LockBin) locks = lockbins[investor];
-		LockBin storage info = locks[0]; 
+		LockBin storage info = locks[0];
 		uint index = info.amount + 1;
 		locks[index] = LockBin({
 			start: releaseStart,
@@ -378,10 +390,95 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 	}
 
 
+	function batchInvest (address[] investors, uint256 amount) public onlyOwner whenRunning canInvest returns (bool) {
+		require(amount > 0);
+
+		uint investorsLength = investors.length;
+		uint investorsCount = 0;
+		uint i;
+		address r;
+		for (i = 0; i < investorsLength; i ++) {
+			r = investors[i];
+			if (r != address(0)) investorsCount ++;
+		}
+		require(investorsCount > 0);
+
+		uint256 totalAmount = amount.mul(uint256(investorsCount));
+		require(canMint(totalAmount));
+
+		token_created = token_created.add(totalAmount);
+
+		for (i = 0; i < investorsLength; i ++) {
+			r = investors[i];
+			if (r == address(0)) continue;
+			wallets[r] = wallets[r].add(amount);
+			emit Mint(r, amount);
+			emit Transfer(address(0), r, amount);
+
+			mapping(uint => LockBin) locks = lockbins[r];
+			LockBin storage info = locks[0];
+			uint index = info.amount + 1;
+			locks[index] = LockBin({
+				start: releaseStart,
+				finish: releaseStart + releaseDuration,
+				duration: releaseDuration / (1 days),
+				amount: amount
+			});
+			info.amount = index;
+		}
+
+		return true;
+	}
+
+
+	function batchInvests (address[] investors, uint256[] amounts) public onlyOwner whenRunning canInvest returns (bool) {
+		uint investorsLength = investors.length;
+		require(investorsLength == amounts.length);
+
+		uint investorsCount = 0;
+		uint256 totalAmount = 0;
+		uint i;
+		address r;
+		for (i = 0; i < investorsLength; i ++) {
+			r = investors[i];
+			if (r == address(0)) continue;
+			investorsCount ++;
+			totalAmount += amounts[i];
+		}
+		require(totalAmount > 0);
+		require(canMint(totalAmount));
+
+		uint256 amount;
+		token_created = token_created.add(totalAmount);
+		for (i = 0; i < investorsLength; i ++) {
+			r = investors[i];
+			if (r == address(0)) continue;
+			amount = amounts[i];
+			wallets[r] = wallets[r].add(amount);
+			emit Mint(r, amount);
+			emit Transfer(address(0), r, amount);
+
+			mapping(uint => LockBin) locks = lockbins[r];
+			LockBin storage info = locks[0];
+			uint index = info.amount + 1;
+			locks[index] = LockBin({
+				start: releaseStart,
+				finish: releaseStart + releaseDuration,
+				duration: releaseDuration / (1 days),
+				amount: amount
+			});
+			info.amount = index;
+		}
+
+		return true;
+	}
+
+
 	function getInvestedToken (address investor) public view returns (uint256) {
 		mapping(uint => LockBin) locks = lockbins[investor];
 		uint256 balance = 0;
 		uint l = locks[0].amount;
+
 		for (uint i = 1; i <= l; i ++) {
 			LockBin memory bin = locks[i];
 			balance = balance.add(bin.amount);
@@ -395,6 +492,7 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 		uint256 balance = 0;
 		uint256 d = 1;
 		uint l = locks[0].amount;
+
 		for (uint i = 1; i <= l; i ++) {
 			LockBin memory bin = locks[i];
 			if (now <= bin.start) {
@@ -414,6 +512,7 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 		uint256 balance = 0;
 		uint256 d = 1;
 		uint l = locks[0].amount;
+
 		for (uint i = 1; i <= l; i ++) {
 			LockBin memory bin = locks[i];
 			if (now >= bin.finish) {
@@ -428,8 +527,8 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 	}
 
 
-	function canPay (address user, uint256 amount) public view returns (bool) {
-		uint256 balance = wallets[user].sub(getLockedToken(user));
+	function canPay (address user, uint256 amount) internal view returns (bool) {
+		uint256 balance = availableWallet(user);
 		return amount <= balance;
 	}
 
@@ -440,6 +539,63 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 		wallets[msg.sender] = wallets[msg.sender].sub(value);
 		wallets[target] = wallets[target].add(value);
 		emit Transfer(msg.sender, target, value);
+		return true;
+	}
+
+
+	function batchTransfer (address[] receivers, uint256 amount) public whenRunning returns (bool) {
+		require(amount > 0);
+
+		uint receiveLength = receivers.length;
+		uint receiverCount = 0;
+		uint i;
+		address r;
+		for (i = 0; i < receiveLength; i ++) {
+			r = receivers[i];
+			if (r != address(0) && r != msg.sender) receiverCount ++;
+		}
+		require(receiverCount > 0);
+
+		uint256 totalAmount = amount.mul(uint256(receiverCount));
+		require(canPay(msg.sender, totalAmount));
+
+		for (i = 0; i < receiveLength; i++) {
+			r = receivers[i];
+			if (r == address(0) || r == msg.sender) continue;
+			wallets[r] = wallets[r].add(amount);
+			emit Transfer(msg.sender, r, amount);
+		}
+		wallets[msg.sender] -= totalAmount;
+		return true;
+	}
+
+
+	function batchTransfers (address[] receivers, uint256[] amounts) public whenRunning returns (bool) {
+		uint receiveLength = receivers.length;
+		require(receiveLength == amounts.length);
+
+		uint receiverCount = 0;
+		uint256 totalAmount = 0;
+		uint i;
+		address r;
+		for (i = 0; i < receiveLength; i ++) {
+			r = receivers[i];
+			if (r == address(0) || r == msg.sender) continue;
+			receiverCount ++;
+			totalAmount += amounts[i];
+		}
+		require(totalAmount > 0);
+		require(canPay(msg.sender, totalAmount));
+
+		uint256 amount;
+		for (i = 0; i < receiveLength; i++) {
+			r = receivers[i];
+			if (r == address(0) || r == msg.sender) continue;
+			amount = amounts[i];
+			wallets[r] = wallets[r].add(amount);
+			emit Transfer(msg.sender, r, amount);
+		}
+		wallets[msg.sender] -= totalAmount;
 		return true;
 	}
 
@@ -459,17 +615,89 @@ contract LockableToken is MintAndBurnToken, DelegatableToken {
 		emit Transfer(from, to, value);
 		return true;
 	}
+
+
+	function batchTransferFrom (address from, address[] receivers, uint256 amount) public whenRunning returns (bool) {
+		require(amount > 0);
+
+		uint receiveLength = receivers.length;
+		uint receiverCount = 0;
+		uint i;
+		address r;
+		for (i = 0; i < receiveLength; i ++) {
+			r = receivers[i];
+			if (r != address(0) && r != from) receiverCount ++;
+		}
+		require(receiverCount > 0);
+
+		uint256 totalAmount = amount.mul(uint256(receiverCount));
+		require(canPay(from, totalAmount));
+
+		uint256 warrant;
+		if (msg.sender != from) {
+			warrant = warrants[from][msg.sender];
+			require(totalAmount <= warrant);
+		}
+
+		for (i = 0; i < receiveLength; i++) {
+			r = receivers[i];
+			if (r == address(0) || r == from) continue;
+			wallets[r] = wallets[r].add(amount);
+			emit Transfer(from, r, amount);
+		}
+		wallets[from] -= totalAmount;
+		if (msg.sender != from) warrants[from][msg.sender] = warrant.sub(totalAmount);
+		return true;
+	}
+
+
+	function batchTransferFroms (address from, address[] receivers, uint256[] amounts) public whenRunning returns (bool) {
+		uint receiveLength = receivers.length;
+		require(receiveLength == amounts.length);
+
+		uint receiverCount = 0;
+		uint256 totalAmount = 0;
+		uint i;
+		address r;
+		for (i = 0; i < receiveLength; i ++) {
+			r = receivers[i];
+			if (r == address(0) || r == from) continue;
+			receiverCount ++;
+			totalAmount += amounts[i];
+		}
+		require(totalAmount > 0);
+		require(canPay(from, totalAmount));
+
+		uint256 warrant;
+		if (msg.sender != from) {
+			warrant = warrants[from][msg.sender];
+			require(totalAmount <= warrant);
+		}
+
+		uint256 amount;
+		for (i = 0; i < receiveLength; i++) {
+			r = receivers[i];
+			if (r == address(0) || r == from) continue;
+			amount = amounts[i];
+			wallets[r] = wallets[r].add(amount);
+			emit Transfer(from, r, amount);
+		}
+		wallets[from] -= totalAmount;
+		if (msg.sender != from) warrants[from][msg.sender] = warrant.sub(totalAmount);
+		return true;
+	}
 }
 
 
 contract FountainToken is LockableToken {
-	string  public constant name     = "FOUNTAIN";
+	string  public constant name     = "Fountain";
 	string  public constant symbol   = "FTN";
 	uint8   public constant decimals = 18;
 
 	uint256 private constant TOKEN_CAP     = 10000000000 * 10 ** uint256(decimals);
-	uint256 private constant TOKEN_INITIAL = 300000000  * 10 ** uint256(decimals); 
+	uint256 private constant TOKEN_INITIAL = 300000000  * 10 ** uint256(decimals);
 
 	constructor () public LockableToken(TOKEN_INITIAL, TOKEN_CAP) {
+		
 	}
 }
