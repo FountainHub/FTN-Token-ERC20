@@ -655,17 +655,10 @@ contract FountainToken is LockableToken {
 	constructor () public LockableToken(TOKEN_INITIAL, TOKEN_CAP, TOKEN_FOUNDATION_CAP) {
 	}
 
-	/**
-	 * 销毁合约
-	 */
 	function suicide () public onlyOwner {
 		selfdestruct(owner);
 	}
 
-	/**
-	 * 转让合约所有权
-	 * @param  newOwner 新所有人
-	 */
 	function transferOwnership (address newOwner) public onlyOwner returns (bool) {
 		require(newOwner != address(0));
 		require(newOwner != owner);
